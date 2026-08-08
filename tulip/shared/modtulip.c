@@ -705,6 +705,59 @@ STATIC mp_obj_t tulip_amyboard_set_midi_out(mp_obj_t pin_obj) {
 STATIC MP_DEFINE_CONST_FUN_OBJ_1(tulip_amyboard_set_midi_out_obj, tulip_amyboard_set_midi_out);
 #endif
 
+#if defined(AMYBOARD) && defined(ESP_PLATFORM)
+// CV pitch quantizer run inside the firmware's cv_read_task (cvquant fork).
+// A sketch pushes down which pitch classes are allowed and its own CV
+// calibration fits; the firmware then answers a CV step on CV out in ~1-2ms
+// instead of the ~7-12ms a Python-side quantizer needs. See the block in
+// amyboard_support.c for semantics; these bindings are just the plumbing.
+extern void amyboard_cv_quant_config(uint8_t, float, float, uint8_t, float, float,
+                                     uint8_t, float, float, float, int32_t, float);
+extern void amyboard_cv_quant_mask(uint16_t);
+extern void amyboard_cv_quant_enable(uint8_t);
+extern int amyboard_cv_quant_note(void);
+
+// cv_quant_config(in_ch, in_slope, in_offset, pitch_ch, pitch_a, pitch_b,
+//                 trig_ch, trig_a, trig_b, trig_volts, trig_ms, hysteresis)
+STATIC mp_obj_t tulip_cv_quant_config(size_t n_args, const mp_obj_t *args) {
+    amyboard_cv_quant_config(
+        (uint8_t)mp_obj_get_int(args[0]),
+        (float)mp_obj_get_float(args[1]), (float)mp_obj_get_float(args[2]),
+        (uint8_t)mp_obj_get_int(args[3]),
+        (float)mp_obj_get_float(args[4]), (float)mp_obj_get_float(args[5]),
+        (uint8_t)mp_obj_get_int(args[6]),
+        (float)mp_obj_get_float(args[7]), (float)mp_obj_get_float(args[8]),
+        (float)mp_obj_get_float(args[9]), (int32_t)mp_obj_get_int(args[10]),
+        (float)mp_obj_get_float(args[11]));
+    return mp_const_none;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(tulip_cv_quant_config_obj, 12, 12, tulip_cv_quant_config);
+
+// cv_quant_mask(mask): bit p set = pitch class p allowed; 0 = hold the pitch.
+STATIC mp_obj_t tulip_cv_quant_mask(mp_obj_t mask_obj) {
+    amyboard_cv_quant_mask((uint16_t)mp_obj_get_int(mask_obj));
+    return mp_const_none;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(tulip_cv_quant_mask_obj, tulip_cv_quant_mask);
+
+// cv_quant_enable(on): disabling ends a live trigger pulse and releases the
+// outputs before returning, so a caller can immediately drive them itself.
+STATIC mp_obj_t tulip_cv_quant_enable(mp_obj_t on_obj) {
+    amyboard_cv_quant_enable((uint8_t)mp_obj_get_int(on_obj));
+    return mp_const_none;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(tulip_cv_quant_enable_obj, tulip_cv_quant_enable);
+
+// cv_quant_note() -> the note currently held on the pitch output, in
+// semitones above C at 0V, or None before the first snap.
+STATIC mp_obj_t tulip_cv_quant_note(void) {
+    int n = amyboard_cv_quant_note();
+    if(n == INT16_MIN) return mp_const_none;
+    return mp_obj_new_int(n);
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_0(tulip_cv_quant_note_obj, tulip_cv_quant_note);
+#endif
+
 
 STATIC mp_obj_t tulip_bootloader_mode(void) {
 #if defined(AMYBOARD) && defined(ESP_PLATFORM)
@@ -1850,6 +1903,10 @@ STATIC const mp_rom_map_elem_t tulip_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_i2c_bg_write), MP_ROM_PTR(&tulip_i2c_bg_write_obj) },
     { MP_ROM_QSTR(MP_QSTR_i2c_bg_pending), MP_ROM_PTR(&tulip_i2c_bg_pending_obj) },
     { MP_ROM_QSTR(MP_QSTR_i2c_bg_errors), MP_ROM_PTR(&tulip_i2c_bg_errors_obj) },
+    { MP_ROM_QSTR(MP_QSTR_cv_quant_config), MP_ROM_PTR(&tulip_cv_quant_config_obj) },
+    { MP_ROM_QSTR(MP_QSTR_cv_quant_mask), MP_ROM_PTR(&tulip_cv_quant_mask_obj) },
+    { MP_ROM_QSTR(MP_QSTR_cv_quant_enable), MP_ROM_PTR(&tulip_cv_quant_enable_obj) },
+    { MP_ROM_QSTR(MP_QSTR_cv_quant_note), MP_ROM_PTR(&tulip_cv_quant_note_obj) },
 #endif
 #else
     #if !defined(AMYBOARD_WEB) && !defined(AMYBOARD_VCV)
