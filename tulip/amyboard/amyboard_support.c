@@ -251,8 +251,18 @@ uint16_t ads1015_get_result(void) {
 static int ads1015_speculate_channel = -1;
 
 uint16_t read_ads1015_raw(uint8_t channel) {
-    if (channel != ads1015_pending_channel)
+    if (channel != ads1015_pending_channel) {
         ads1015_start_conversion(channel);
+        // The ADS1015 takes ~25us to wake from single-shot shutdown, during
+        // which OS still reads "idle" and CONVERT still holds the *previous*
+        // conversion -- the other channel's. Polling immediately can win that
+        // race and hand channel A a copy of channel B (seen on hardware as
+        // the chord following the quantizer's CV). One tick guarantees the
+        // fresh conversion (0.3ms at 3300 SPS) is underway or already done.
+        // The default alternating scan never takes this branch after boot,
+        // so it costs nothing outside the quantizer's fast mode.
+        vTaskDelay(1);
+    }
     uint16_t result = ads1015_get_result();
     // Speculatively start the next conversion.  Assumes we're just using channels 0 and 1.
     ads1015_start_conversion(ads1015_speculate_channel >= 0 ?
