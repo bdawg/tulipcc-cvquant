@@ -21,6 +21,7 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_timer.h"
+#include "esp_rom_sys.h"
 #include "driver/i2s_std.h"
 
 
@@ -252,16 +253,23 @@ static int ads1015_speculate_channel = -1;
 
 uint16_t read_ads1015_raw(uint8_t channel) {
     if (channel != ads1015_pending_channel) {
+        // Writing OS=1 starts a conversion ONLY if the ADS1015 is idle -- a
+        // start issued while the previous (other-channel) conversion is still
+        // in flight is silently ignored, and the poll below then collects
+        // that conversion's result under this channel's name. The fast scan
+        // hits exactly that: it runs in catch-up (each pass overruns its 1ms
+        // tick), so the periodic other-channel read lands ~0.2ms after the
+        // fast channel's speculative start, mid-conversion -- seen on
+        // hardware as CV in 1 becoming a copy of CV in 2 and the chord
+        // following the quantizer's CV ~94% of the time. (Settle delays
+        // after the start were tried first and fix nothing: the start
+        // itself is what gets lost.) Drain the in-flight conversion, then
+        // start, then give the ~25us single-shot wake-up time to drop OS
+        // before the poll looks. The default alternating scan never takes
+        // this branch after boot, so none of this costs anything there.
+        ads1015_get_result();
         ads1015_start_conversion(channel);
-        // The ADS1015 takes ~25us to wake from single-shot shutdown, during
-        // which OS still reads "idle" and CONVERT still holds the *previous*
-        // conversion -- the other channel's. Polling immediately can win that
-        // race and hand channel A a copy of channel B (seen on hardware as
-        // the chord following the quantizer's CV). One tick guarantees the
-        // fresh conversion (0.3ms at 3300 SPS) is underway or already done.
-        // The default alternating scan never takes this branch after boot,
-        // so it costs nothing outside the quantizer's fast mode.
-        vTaskDelay(1);
+        esp_rom_delay_us(100);
     }
     uint16_t result = ads1015_get_result();
     // Speculatively start the next conversion.  Assumes we're just using channels 0 and 1.
